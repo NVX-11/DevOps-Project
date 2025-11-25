@@ -1,5 +1,4 @@
 const request = require('supertest');
-const express = require('express');
 
 jest.mock('winston', () => ({
     createLogger: jest.fn(() => ({
@@ -20,6 +19,12 @@ jest.mock('winston', () => ({
 const app = require('./index');
 
 describe('User Service API', () => {
+    afterAll(() => {
+        if (app && app.close) {
+            app.close();
+        }
+    });
+
     test('GET /health returns healthy status', async () => {
         const response = await request(app).get('/health');
         expect(response.status).toBe(200);
