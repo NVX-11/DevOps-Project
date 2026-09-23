@@ -74,7 +74,7 @@ The Node.js service follows the same basic path with npm tests, Trivy, Docker Bu
 
 There is one detail I am leaving visible on purpose: the final deploy job in the repository is still a placeholder. Argo CD was installed and running in the environment, but this repository does **not** represent a fully closed automated path from a successful GitHub Actions run to a Kubernetes deployment.
 
-I would rather leave that boundary honest than rewrite an old project into something it was not.
+That last handoff never became part of the repo, so I left it that way.
 
 ---
 
@@ -115,7 +115,7 @@ Terraform has a different role here than it does in my cloud projects.
 
 Instead of provisioning AWS or Azure resources, it wraps the local lab setup: starting Minikube, enabling the metrics-server and ingress addons, installing Kyverno and Argo CD, and building the two service images.
 
-That made the setup repeatable, but it also showed me where Terraform starts feeling more like an orchestration wrapper than infrastructure modeling. I would make different choices for a long-lived environment today, but I am keeping the implementation because it reflects how I approached the problem at the time.
+That gave me one place to bootstrap the lab and repeat the setup. In a long-lived environment I would separate cluster provisioning from the tools installed on top of it, but for this project Terraform was a practical way to bring the local environment up consistently.
 
 ---
 
