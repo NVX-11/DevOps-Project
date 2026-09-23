@@ -1,254 +1,179 @@
 # Task Manager DevOps Platform
 
-**Educational Project**: Demonstrates production-grade DevOps practices using minimal microservices. Focus on infrastructure, automation, and observability.
+**Two small services, one Kubernetes cluster, and the operational layer around them.**
 
-## Why This Stack?
+I built this project around a deliberately simple application. A task API in Flask and a user API in Express were enough to give me real workloads without turning the project into an application-development exercise.
 
-### Application Layer
-- **Python Flask (Task Service)**: Prometheus instrumentation, REST API patterns, pytest integration
-- **Node.js Express (User Service)**: Polyglot microservices, independent scaling, npm ecosystem
-- **Nginx**: Centralized API gateway for routing and load balancing
+The part I cared about was everything around those services: containers, CI, routing, health checks, autoscaling, metrics, logs, alerts, policy enforcement, secrets, and GitOps tooling.
 
-### Infrastructure
-- **Docker**: Multi-stage builds, security scanning with Trivy
-- **Kubernetes**: Resource limits, health probes, horizontal autoscaling
-- **Terraform**: Reproducible infrastructure provisioning
+This repository is the implementation record of that environment. It is **not kept running today**; the manifests, workflows, screenshots, and configuration are here as a record of what I built and tested.
 
-### DevOps Tools
-- **ArgoCD**: GitOps continuous delivery with automatic sync
-- **Kyverno**: Policy enforcement for security and compliance
-- **Prometheus**: Time-series metrics collection
-- **Grafana**: Monitoring dashboards and visualization
-- **Vault**: Secure secrets management
-- **GitHub Actions**: Automated CI/CD pipelines
+---
 
-## Architecture
+## The architecture
 
-```
-External → Nginx Gateway (:30080)
-          ├─ /api/tasks → Task Service (Python:5000)
-          └─ /api/users → User Service (Node.js:3000)
+The application path was straightforward:
 
-Monitoring: Services → Prometheus (:30090) → Grafana (:30300)
-GitOps: Git Repo → ArgoCD → Kubernetes
-Policy: Kyverno → Admission Control → Deployments
-Secrets: Vault (:30820)
-```
+`Clients → Nginx Gateway → Task Service / User Service`
 
-## Prerequisites
+Around that path sat the platform pieces I wanted to work with: GitHub Actions for the build pipeline, Kubernetes for runtime orchestration, Prometheus and Grafana for metrics, Loki and Promtail for logs, Alertmanager for alerts, Kyverno for policy checks, Vault for secrets experiments, and Argo CD as the GitOps component in the cluster.
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Docker | 20.10+ | Container runtime |
-| Minikube | 1.30+ | Local Kubernetes |
-| kubectl | 1.28+ | Kubernetes CLI |
-| Terraform | 1.0+ | Infrastructure provisioning |
+![Task Manager DevOps Platform architecture](docs/images/architecture.png)
 
-**System**: 4 CPU cores, 8GB RAM, 20GB disk
+### What lived where
 
-## Quick Start
+**Application path**
 
-```bash
-# Start cluster
-minikube start --cpus=2 --memory=4096 --driver=docker
-minikube addons enable metrics-server
+Nginx was the single entry point. It routed `/api/tasks` to the Flask service and `/api/users` to the Express service.
 
-# Provision infrastructure
-cd terraform && terraform init && terraform apply -auto-approve && cd ..
+**Kubernetes**
 
-# Deploy all services
-kubectl apply -f kubernetes/namespace.yaml
-kubectl apply -f kubernetes/task-service/
-kubectl apply -f kubernetes/user-service/
-kubectl apply -f kubernetes/nginx/
-kubectl apply -f kubernetes/monitoring/
-kubectl apply -f kubernetes/vault/
+Both services ran inside the `task-manager` namespace with readiness and liveness probes, resource requests and limits, and HPAs that could scale each deployment from two to five replicas.
 
-# Wait for ready
-kubectl wait --for=condition=ready pod --all -n task-manager --timeout=300s
+**Observability**
 
-# Access services
-export MINIKUBE_IP=$(minikube ip)
-echo "API: http://$MINIKUBE_IP:30080"
-echo "Prometheus: http://$MINIKUBE_IP:30090"
-echo "Grafana: http://$MINIKUBE_IP:30300 (admin/admin123)"
-echo "Vault: http://$MINIKUBE_IP:30820 (token: root)"
-```
+Prometheus discovered and scraped the application pods, Grafana visualized the metrics, Promtail shipped pod logs into Loki, and Alertmanager handled the alerting path.
 
-## API Usage
+---
 
-### Task Service
-```bash
-# List all tasks
-curl http://$(minikube ip):30080/api/tasks
+## I kept the application intentionally small
 
-# Create task
-curl -X POST http://$(minikube ip):30080/api/tasks \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Deploy v1.0","description":"Production release","done":false}'
+The APIs were never supposed to be the impressive part.
 
-# Update task
-curl -X PUT http://$(minikube ip):30080/api/tasks/1 \
-  -H "Content-Type: application/json" \
-  -d '{"done":true}'
+The task service exposes a small CRUD API, health and readiness endpoints, and Prometheus metrics. The user service does the same in Node.js. Both use in-memory data because persistence was not the problem I was trying to solve here.
 
-# Delete task
-curl -X DELETE http://$(minikube ip):30080/api/tasks/1
-```
+That kept the application easy to understand while still giving the platform something real to route, probe, scale, monitor, and break.
 
-### User Service
-```bash
-# List all users
-curl http://$(minikube ip):30080/api/users
+![Task Service API response](docs/images/task-service-api-response.png)
 
-# Create user
-curl -X POST http://$(minikube ip):30080/api/users \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Alice","email":"alice@company.com","role":"DevOps Engineer"}'
+---
 
-# Update user
-curl -X PUT http://$(minikube ip):30080/api/users/1 \
-  -H "Content-Type: application/json" \
-  -d '{"role":"Senior DevOps Engineer"}'
-```
+## Kubernetes was the actual project
 
-## Monitoring
+This was the point where the project stopped being two small APIs and became something I found much more interesting.
 
-### Prometheus Queries
-```promql
-# Service availability
-up{job=~"task-service|user-service"}
+The services were deployed into Minikube behind an Nginx gateway. Each deployment had explicit resource requests and limits, readiness and liveness probes, and an HPA driven by CPU and memory utilization. The cluster also included the ingress controller, Argo CD, Kyverno, Vault, and the monitoring stack.
 
-# HTTP request rate
-rate(flask_http_request_total[5m])
-rate(http_requests_total[5m])
+The screenshot below is from the running environment rather than a recreated mockup.
 
-# Resource usage
-process_resident_memory_bytes{job=~"task-service|user-service"}
-rate(process_cpu_seconds_total[5m])
+![Kubernetes platform running](docs/images/kubernetes-platform-running.png)
 
-# Latency (p95)
-histogram_quantile(0.95, rate(flask_http_request_duration_seconds_bucket[5m]))
-```
+One thing I liked about this setup was that the application stayed boring while the platform around it became the real moving part. A route change, a failed health check, a missing label, or a metrics problem could matter more than the CRUD code itself.
 
-### Grafana Dashboard
-```bash
-# Import pre-configured dashboard
-curl -X POST -H "Content-Type: application/json" -u admin:admin123 \
-  -d @docs/grafana-dashboard.json \
-  http://$(minikube ip):30300/api/dashboards/db
-```
+---
 
-Dashboard panels:
-- Service health (UP/DOWN status)
-- HTTP request rates
-- Memory and CPU utilization
-- Request duration percentiles
+## CI was there to protect the build
 
-## GitOps (ArgoCD)
+The two services have separate GitHub Actions workflows.
 
-```bash
-# Get admin password
-kubectl -n argocd get secret argocd-initial-admin-secret \
-  -o jsonpath="{.data.password}" | base64 -d
+For the Flask service, the pipeline runs pytest with coverage, scans the source with Trivy, builds the container image, publishes it to GHCR, and scans the built image for high and critical vulnerabilities.
 
-# Access UI
-kubectl port-forward svc/argocd-server -n argocd 8080:443
-# https://localhost:8080 (admin/<password>)
-```
+The Node.js service follows the same basic path with npm tests, Trivy, Docker Buildx, and GHCR.
 
-ArgoCD automatically syncs the `kubernetes/` directory to the cluster. Manual changes are reverted to maintain Git as the source of truth.
+![GitHub Actions pipeline](docs/images/ci-pipeline.png)
 
-## Policy Enforcement (Kyverno)
+There is one detail I am leaving visible on purpose: the final deploy job in the repository is still a placeholder. Argo CD was installed and running in the environment, but this repository does **not** represent a fully closed automated path from a successful GitHub Actions run to a Kubernetes deployment.
 
-Active policies (audit mode):
-- **require-labels**: Enforces app/version labels
-- **disallow-root-user**: Prevents root containers
-- **require-resource-limits**: Mandates CPU/memory limits
+I would rather leave that boundary honest than rewrite an old project into something it was not.
 
-```bash
-# View violations
-kubectl get policyreport -A
-kubectl describe policyreport -n task-manager
+---
+
+## Observability was the part I kept coming back to
+
+Both services expose metrics that Prometheus can discover inside the `task-manager` namespace. The Prometheus configuration also includes alerts for service availability, CPU usage, and memory usage.
+
+Grafana was where the environment became much easier to reason about. I could watch request activity for both services, memory and CPU behavior, and request duration instead of relying only on `kubectl` output.
+
+![Grafana observability dashboard](docs/images/observability-dashboard.png)
+
+For logs, Promtail ran as a DaemonSet and forwarded Kubernetes pod logs to Loki. Alertmanager was wired to separate critical and warning routes, with placeholder Slack receivers in the repository rather than real webhook credentials.
+
+That was a useful distinction for me: metrics told me *that* something changed, while logs were where I went to understand what the service was actually doing.
+
+---
+
+## Guardrails around the cluster
+
+Kyverno was there to make a few platform expectations explicit instead of leaving them as README advice.
+
+The policies in this repository cover:
+
+- required `app` and `version` labels on deployments
+- blocking containers that run as root
+- checking CPU and memory requests and limits
+- generating a default-deny ingress NetworkPolicy for new namespaces
+
+![Kyverno policies](docs/images/kyverno-policies.png)
+
+Vault was also deployed inside the lab, but deliberately in development mode. I used it to work through the secret-management flow, not to pretend a single-node dev Vault with a root token was a production secrets platform.
+
+---
+
+## Terraform was the bootstrap layer
+
+Terraform has a different role here than it does in my cloud projects.
+
+Instead of provisioning AWS or Azure resources, it wraps the local lab setup: starting Minikube, enabling the metrics-server and ingress addons, installing Kyverno and Argo CD, and building the two service images.
+
+That made the setup repeatable, but it also showed me where Terraform starts feeling more like an orchestration wrapper than infrastructure modeling. I would make different choices for a long-lived environment today, but I am keeping the implementation because it reflects how I approached the problem at the time.
+
+---
+
+## What made this harder than I expected
+
+Installing individual tools was usually the easy part.
+
+The harder part was getting their assumptions to line up. Prometheus needed the right pod labels and annotations. HPA needed usable resource metrics. Nginx needed stable service names and ports. Kyverno policies had to match the objects being deployed. Logging needed access to the right container log paths. Every extra component created another boundary that had to agree with the rest of the cluster.
+
+That changed the way I looked at platform work. The value was not in having a long list of tools in the repository.
+
+> **The more tooling I added, the less the project was about installing tools and the more it was about getting their assumptions to line up.**
+
+---
+
+## Repository map
+
+```text
+.github/workflows/
+├── task-service-ci.yaml        Flask test, scan, build and publish
+└── user-service-ci.yaml        Node.js test, scan, build and publish
+
+services/
+├── task-service/               Flask API, tests and Dockerfile
+└── user-service/               Express API, tests and Dockerfile
+
+kubernetes/
+├── task-service/               Deployment, Service and HPA
+├── user-service/               Deployment, Service and HPA
+├── nginx/                      API gateway configuration
+├── monitoring/                 Prometheus, Grafana, Loki and Alertmanager
+├── vault/                      Development Vault deployment
+├── kyverno/                    Cluster policies
+├── ingress.yaml
+└── namespace.yaml
+
+terraform/
+└── main.tf                     Local Minikube and platform bootstrap
+
+docs/
+├── grafana-dashboard.json
+└── images/
+    ├── architecture.png
+    ├── ci-pipeline.png
+    ├── kubernetes-platform-running.png
+    ├── kyverno-policies.png
+    ├── observability-dashboard.png
+    └── task-service-api-response.png
+
+docker-compose.yaml              Smaller local Docker setup
 ```
 
-## Secrets Management (Vault)
+---
 
-```bash
-# Configure access
-export VAULT_ADDR="http://$(minikube ip):30820"
-export VAULT_TOKEN="root"
+## A note on the current repository
 
-# Store secret
-curl -X POST -H "X-Vault-Token: $VAULT_TOKEN" \
-  -d '{"data":{"username":"admin","password":"secure123"}}' \
-  $VAULT_ADDR/v1/secret/data/database/credentials
+This is a **portfolio record of a completed local Kubernetes lab**, not a maintained production environment and not a claim that every dependency or manifest should be used unchanged today.
 
-# Retrieve secret
-curl -H "X-Vault-Token: $VAULT_TOKEN" \
-  $VAULT_ADDR/v1/secret/data/database/credentials | jq '.data.data'
-```
+Some choices are intentionally visible as they were during the project: Minikube, in-memory application data, dev-mode Vault, `latest` image tags in parts of the lab, and an unfinished deployment handoff in GitHub Actions.
 
-## CI/CD Pipelines
-
-GitHub Actions workflows (`.github/workflows/`):
-
-**Task Service**:
-1. pytest with coverage
-2. Trivy security scan
-3. Docker build
-4. Registry push (optional)
-
-**User Service**:
-1. npm test with coverage
-2. Trivy security scan
-3. Docker build
-4. Registry push (optional)
-
-Local testing:
-```bash
-# Task Service
-cd services/task-service && python -m pytest tests/ -v --cov=app
-
-# User Service
-cd services/user-service && npm test
-```
-
-## Project Structure
-
-```
-├── .github/workflows/          # CI/CD pipelines
-├── services/
-│   ├── task-service/          # Python Flask API + tests
-│   └── user-service/          # Node.js Express API + tests
-├── kubernetes/
-│   ├── task-service/          # K8s manifests
-│   ├── user-service/          # K8s manifests
-│   ├── nginx/                 # API Gateway
-│   ├── monitoring/            # Prometheus + Grafana
-│   ├── vault/                 # Secrets management
-│   └── kyverno/               # Security policies
-├── terraform/                 # IaC provisioning
-├── docs/                      # Grafana dashboards
-└── docker-compose.yaml        # Local development
-```
-
-## Key Learning Outcomes
-
-- Container orchestration with resource management
-- Infrastructure as Code with Terraform
-- GitOps workflow implementation
-- Policy-based security enforcement
-- Metrics collection and visualization
-- Secrets management patterns
-- CI/CD automation
-- Microservices with API gateway
-- Polyglot service integration
-
-## Notes
-
-This project uses development configurations (in-memory databases, dev-mode Vault, minimal replicas) for educational purposes. Production deployments require persistent storage, multi-node clusters, TLS, authentication, and additional security hardening.
-
-## License
-
-MIT License - Educational purposes
+I am keeping those details visible because the useful part of this repository is the platform I built, the environment I actually ran, and what I learned from connecting the pieces — not polishing the history until it looks like a production system that never existed.
